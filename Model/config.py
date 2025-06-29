@@ -13,7 +13,7 @@ CLASSES = [
 ]
 
 # Model parameters
-FRAME_SIZE = (64, 64)  # Input image size
+FRAME_SIZE = (224, 224)  # Input image size/it is for training try to get
 CLIP_LENGTH = 16        # Number of frames per clip
 BATCH_SIZE = 8
 NUM_EPOCHS = 20
