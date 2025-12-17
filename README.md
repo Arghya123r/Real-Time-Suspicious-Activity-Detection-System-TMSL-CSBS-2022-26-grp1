@@ -4,7 +4,7 @@
 
 i.Download this dataset: [ucf-crime-dataset](https://www.kaggle.com/datasets/odins0n/ucf-crime-dataset)
 
-ii. Run ```pip install requirements.txt``` (virtual enviorment recommended)
+ii. Run ```pip install requirements.txt``` (virtual environment recommended)
 
 iii.Access Model_Code and training-book-lightweight.ipynb
 
