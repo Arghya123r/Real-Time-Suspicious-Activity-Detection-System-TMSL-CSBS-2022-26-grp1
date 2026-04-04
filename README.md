@@ -12,7 +12,7 @@ This research-oriented project implements an automated surveillance system desig
 
 | Module | Component | Primary Function |
 | :--- | :--- | :--- |
-| **ML Engine** | `ActivityDetector.py` | Acts as the primary inference engine utilizing a **Long-term Recurrent Convolutional Network (LRCN)** to classify actions. |
+| **Inference Code** | `ActivityDetector.py` | Acts as the primary inference engine utilizing a **Long-term Recurrent Convolutional Network (LRCN)** to classify actions. |
 | **Data Persistence** | `Api_to store.py` | Captures raw detection data via POST requests and logs them into a structured `timestamps.csv` in `HH:MM:SS.ms` format. |
 | **Event Merging** | `merge_api_2.py` | Implements interval-merging logic to group fragmented detections into single events if the gap is **≤ 300 seconds**. |
 | **Alert System** | `Alert system.py` | Fetches contacts from **MongoDB Atlas** and dispatches **SMTP** email alerts with localized **IST timestamps**. |
