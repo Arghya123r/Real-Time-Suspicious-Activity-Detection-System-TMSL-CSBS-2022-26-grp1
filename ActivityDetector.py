@@ -1,6 +1,8 @@
 # %% [code] {"execution":{"iopub.status.busy":"2025-12-16T13:57:36.685387Z","iopub.execute_input":"2025-12-16T13:57:36.685564Z","iopub.status.idle":"2025-12-16T13:57:47.925259Z","shell.execute_reply.started":"2025-12-16T13:57:36.685547Z","shell.execute_reply":"2025-12-16T13:57:47.924725Z"}}
 #!/usr/bin/env python3
 import os
+import time
+import threading
 import numpy as np
 import cv2
 import torch
@@ -10,6 +12,7 @@ from torchvision import models
 from PIL import Image
 from collections import deque
 import argparse
+import requests
 
 # %% [code] {"execution":{"iopub.status.busy":"2025-12-16T13:57:47.926628Z","iopub.execute_input":"2025-12-16T13:57:47.926903Z","iopub.status.idle":"2025-12-16T13:57:48.018745Z","shell.execute_reply.started":"2025-12-16T13:57:47.926886Z","shell.execute_reply":"2025-12-16T13:57:48.018149Z"}}
 class Cfg:
@@ -128,9 +131,59 @@ class SuspiciousActivityDetector:
         ])
         
         print(f"Model loaded on {self.device}")
+        
+        # API URLs
+        self.alert_url = "http://localhost:5001/alert-detection"
+        self.store_url = "http://localhost:5002/store_timestamp"
+        self.merge_url = "http://localhost:5003/merge_timestamps"
+        self.intervals = []
+        self.video_id = None
+        self.active_interval = None
+        self.last_alert_time = 0.0
+        self.alert_cooldown_seconds = 300.0
+        self.alert_lock = threading.Lock()
 
-    def extract_and_predict(self, video_path, output_path, display_live=False):
+    def _trigger_alert(self):
+        try:
+            resp = requests.get(self.alert_url, timeout=30)
+            print(f"Alert triggered")
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"Alert trigger failed: {e}")
+
+    def _try_trigger_alert(self):
+        now = time.time()
+        with self.alert_lock:
+            if now - self.last_alert_time < self.alert_cooldown_seconds:
+                return False
+            self.last_alert_time = now
+        thread = threading.Thread(target=self._trigger_alert, daemon=True)
+        thread.start()
+        return True
+
+    def _store_interval(self, interval):
+        try:
+            # Ensure timestamps are passed to the store API as seconds (float values)
+            data = {
+                'video_id': self.video_id,
+                'start_time': float(interval['start_time']),
+                'end_time': float(interval['end_time'])
+            }
+            resp = requests.post(self.store_url, json=data, timeout=5)
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"Store timestamp failed for {interval}: {e}")
+
+    def _trigger_merge(self):
+        try:
+            resp = requests.post(self.merge_url, timeout=5)
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"Merge trigger failed: {e}")
+
+    def extract_and_predict(self, video_path, output_path, display_live=False,video_id=None):
         """Extract frames from video and predict suspicious activities"""
+        self.video_id =video_id if video_id is not None else os.path.basename(output_path)
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise ValueError(f"Cannot open video: {video_path}")
@@ -168,16 +221,30 @@ class SuspiciousActivityDetector:
             frame_buffer.append(tensor_frame)
             
             # Predict when buffer is full
-            if len(frame_buffer) == 2*self.frames_per_sequence:
-                if frame_count % PROCESS_EVERY_N_FRAMES == 0:
-                    prediction = self._predict_sequence(frame_buffer)
-                prediction_buffer.append(prediction)
-            else:
-                # Use previous prediction or default for early frames
-                prediction = prediction_buffer[-1] if prediction_buffer else 0.0
-                prediction_buffer.append(prediction)
+            if len(frame_buffer) == 2*self.frames_per_sequence and frame_count % PROCESS_EVERY_N_FRAMES == 0:
+                prediction = self._predict_sequence(frame_buffer)
+                start_time = max(0.0, (frame_count - 2*self.frames_per_sequence + 1) / fps)
+                end_time = (frame_count + 1) / fps
 
-            all_predictions.append(prediction_buffer[-1])
+                if prediction >= self.threshold:
+                    if self.active_interval is None:
+                        self._try_trigger_alert()
+                        self.active_interval = {
+                            'start_time': start_time,
+                            'end_time': end_time
+                        }
+                    else:
+                        self.active_interval['end_time'] = end_time
+                else:
+                    if self.active_interval is not None:
+                        self.intervals.append(self.active_interval)
+                        self.active_interval = None
+            else:
+                prediction = prediction_buffer[-1] if prediction_buffer else 0.0
+
+            prediction_buffer.append(prediction)
+            all_predictions.append(prediction)
+
             
             # Add overlay to frame
             overlay_frame = self._add_overlay(frame, prediction_buffer[-1])
@@ -201,6 +268,17 @@ class SuspiciousActivityDetector:
         #    cv2.destroyAllWindows()
         
         print(f"Output video saved to: {output_path}")
+
+        if self.active_interval is not None:
+            self.intervals.append(self.active_interval)
+            self.active_interval = None
+
+        # Store intervals and merge only when suspicious activity was found
+        if self.intervals:
+            for interval in self.intervals:
+                self._store_interval(interval)
+            self._trigger_merge()
+
         return self._generate_summary(all_predictions)
         
     def aggregate_video_score(self,seg_logits, mode="mean", k=1):
@@ -363,19 +441,18 @@ def main():
     #    # Real-time webcam processing
     #    detector = RealTimeDetector(args.model, args.device, args.threshold)
     #   detector.process_webcam(args.camera_id)
-    model = 'Model\lrcn_ucf_best.pt'
-    output_dir = 'output'
+    model = r"D:\inference testing\lrcn_ucf_best (8).pt"
+    output_dir = r"D:\dataset\data"
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     threshold = 0.5
-    input_1 = args.input
+    input_1 = r"D:\inference testing\RoadAccidents008_x264.mp4"
     filename = os.path.basename(input_1)
     output_filename = 'output_' + filename
-        # Video file processing
-    output = os.path.join(output_dir,output_filename)
+    # Video file processing
+    output = os.path.join(output_dir, output_filename)
     detector = SuspiciousActivityDetector(model, device, threshold)
-    
     display=False
-    summary = detector.extract_and_predict(input_1, output, display)
+    summary = detector.extract_and_predict(input_1, output, display, video_id=output_filename)
         
         # Print summary
     print("\n" + "="*50)
